@@ -87,10 +87,6 @@ Methylation sample counts drop from 122 to 36 because script `02` removes
 outliers — tumour samples falling inside the normal 95% PCA ellipsoid, plus 28
 manually flagged arrays.
 
-> **Note on filenames.** The legacy names `22counts_self.csv` / `78counts.csv`
-> derive from the accession suffixes (*GSE1775**22***, *GSE799**78***), **not**
-> from sample counts. They have been renamed to `GSE177522counts.csv` and
-> `GSE79978counts.csv` to avoid that confusion.
 
 ---
 
