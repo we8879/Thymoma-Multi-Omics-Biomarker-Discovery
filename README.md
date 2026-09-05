@@ -8,7 +8,8 @@ Reproducible analysis code for:
 > ² Kaifeng Key Laboratory of Translational Medicine for Thoracic Diseases, Kaifeng 475004, China
 > ³ Laboratory of Receptor Gene Regulation and Drug Discovery, School of Basic Medical Sciences, Henan University, Kaifeng 475004, China
 
-This integrated multi-omics pipeline consolidates bulk transcriptomic, DNA methylation, and proteomic profiling to distill approximately 20,000 genes into a robust **26-gene signature**. We systematically benchmarked **56 machine learning algorithmic combinations** on this signature, and subsequently validated the leading candidate, **PKP1**, through single-cell resolution mapping and immunohistochemical staining
+This integrated multi-omics pipeline integrates bulk transcriptomic, DNA methylation, and proteomic data to systematically narrow down approximately 20,000 genes to a robust **26-gene signature**. We then benchmarked **56 machine learning algorithm combinations** to identify the optimal predictive model and further prioritized **PKP1** as the leading candidate. The biological relevance of PKP1 was subsequently validated at **single-cell resolution** and by **immunohistochemical staining**.
+
 
 ---
 
