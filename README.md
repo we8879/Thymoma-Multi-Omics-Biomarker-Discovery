@@ -105,10 +105,6 @@ Thymoma_MultiOmics/
 │   └── 07_scRNA_seq_Analysis.R          Seurat QC/clustering + scTenifoldKnk
 ├── data/                                Input data (see data/README.md)
 ├── results/                             Final result tables (see results/README.md)
-├── docs/
-│   └── DEPENDENCIES.md                  Package list + install commands
-├── .gitignore
-├── .gitattributes
 ├── LICENSE                              MIT
 └── README.md
 ```
