@@ -8,6 +8,7 @@
 #              - AUC benchmarking on the training set and the TCGA test set
 #              - Differential boxplots, per-gene ROC and multi-gene ROC for
 #                the best model
+#              - Nested CV
 # Date: 2026-09-05
 # ===========================================================================
 # Data Preparation and Batch Effect Correction
@@ -605,3 +606,260 @@ test_result <- plot_multi_gene_roc(
   filename = "ROC/TCGA_MultiGene_ROC.pdf",
   colors = colors
 )
+
+# ==================== Nested Cross-Validation  ====================
+library(glmnet)
+library(caret)
+library(pROC)
+library(ggplot2)
+
+set.seed(123)
+outer_folds <- createFolds(y, k = 5, list = TRUE)
+
+auc_outer <- c()
+all_pred <- c()
+all_true <- c()
+
+alpha_candidates <- c(0.01, 0.05, 0.1, 0.3, 0.5, 0.7, 1)
+
+for (i in seq_along(outer_folds)) {
+  outer_test_idx <- outer_folds[[i]]
+  outer_train_idx <- setdiff(1:length(y), outer_test_idx)
+  
+  train_x_outer <- Train_data[outer_train_idx, , drop = FALSE]
+  train_y_outer <- y[outer_train_idx]
+  test_x_outer  <- Train_data[outer_test_idx, , drop = FALSE]
+  test_y_outer  <- y[outer_test_idx]
+  
+  nfolds_outer <- min(5, length(train_y_outer))
+  if (nfolds_outer < 4 || length(unique(train_y_outer)) < 2) {
+    cat("Fold", i, ": insufficient outer training samples or classes, skipped\n")
+    next
+  }
+  
+  # ------ Inner 5-fold: select alpha ------
+  inner_folds <- createFolds(train_y_outer, k = 5, list = TRUE)
+  best_alpha <- 0.1
+  best_inner_auc <- 0
+  
+  for (alpha_val in alpha_candidates) {
+    inner_aucs <- c()
+    
+    for (j in 1:5) {
+      inner_test_idx <- inner_folds[[j]]
+      inner_train_idx <- setdiff(1:length(train_y_outer), inner_test_idx)
+      
+      train_x_inner <- train_x_outer[inner_train_idx, , drop = FALSE]
+      train_y_inner <- train_y_outer[inner_train_idx]
+      test_x_inner  <- train_x_outer[inner_test_idx, , drop = FALSE]
+      test_y_inner  <- train_y_outer[inner_test_idx]
+      
+      if (length(unique(train_y_inner)) < 2) {
+        inner_aucs <- c(inner_aucs, NA)
+        next
+      }
+      
+      nfolds_inner <- min(5, length(train_y_inner))
+      if (nfolds_inner < 4) {
+        inner_aucs <- c(inner_aucs, NA)
+        next
+      }
+      
+      cv_fit_inner <- tryCatch(
+        cv.glmnet(
+          x = train_x_inner,
+          y = train_y_inner,
+          family = "binomial",
+          alpha = alpha_val,
+          nfolds = nfolds_inner
+        ),
+        error = function(e) NULL
+      )
+      
+      if (is.null(cv_fit_inner)) {
+        inner_aucs <- c(inner_aucs, NA)
+        next
+      }
+      
+      pred_inner <- as.vector(
+        predict(cv_fit_inner,
+                newx = test_x_inner,
+                type = "response",
+                s = "lambda.min")
+      )
+      
+      if (!any(is.na(pred_inner)) && length(unique(test_y_inner)) == 2) {
+        roc_obj <- tryCatch(roc(test_y_inner, pred_inner, quiet = TRUE),
+                            error = function(e) NULL)
+        if (!is.null(roc_obj)) {
+          inner_aucs <- c(inner_aucs, auc(roc_obj))
+        } else {
+          inner_aucs <- c(inner_aucs, NA)
+        }
+      } else {
+        inner_aucs <- c(inner_aucs, NA)
+      }
+    }
+    
+    mean_inner <- mean(inner_aucs, na.rm = TRUE)
+    if (!is.na(mean_inner) && mean_inner > best_inner_auc) {
+      best_inner_auc <- mean_inner
+      best_alpha <- alpha_val
+    }
+  }
+  
+  cat("Fold", i, "best alpha:", best_alpha,
+      "(inner mean AUC =", round(best_inner_auc, 4), ")\n")
+  
+  # ------ Outer evaluation: fit with selected alpha ------
+  cv_fit_outer <- tryCatch(
+    cv.glmnet(
+      x = train_x_outer,
+      y = train_y_outer,
+      family = "binomial",
+      alpha = best_alpha,
+      nfolds = nfolds_outer
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(cv_fit_outer)) {
+    cat("Fold", i, ": outer training failed\n")
+    next
+  }
+  
+  pred_outer <- as.vector(
+    predict(cv_fit_outer,
+            newx = test_x_outer,
+            type = "response",
+            s = "lambda.min")
+  )
+  
+  if (!any(is.na(pred_outer)) && length(unique(test_y_outer)) == 2) {
+    roc_obj <- tryCatch(roc(test_y_outer, pred_outer, quiet = TRUE),
+                        error = function(e) NULL)
+    if (!is.null(roc_obj)) {
+      outer_auc <- auc(roc_obj)
+      auc_outer <- c(auc_outer, outer_auc)
+      all_pred <- c(all_pred, pred_outer)
+      all_true <- c(all_true, test_y_outer)
+      cat("  Outer AUC =", round(outer_auc, 4), "\n")
+    } else {
+      cat("Fold", i, ": outer ROC computation failed\n")
+    }
+  } else {
+    cat("Fold", i, ": outer evaluation failed / insufficient classes\n")
+  }
+}
+
+# ==================== Nested CV Summary ====================
+cat("\n========== Nested CV Results ==========\n")
+cat("Valid outer folds:", length(auc_outer), "/ 5\n")
+
+if (length(auc_outer) > 0) {
+  cat("Nested CV AUC mean:", round(mean(auc_outer), 4), "\n")
+  cat("Nested CV AUC SD:", round(sd(auc_outer), 4), "\n")
+  cat("Nested CV AUC 95% CI:",
+      round(quantile(auc_outer, 0.025), 4), "-",
+      round(quantile(auc_outer, 0.975), 4), "\n")
+} else {
+  cat("No valid nested CV AUC values\n")
+}
+
+# ==================== Pooled Outer Predictions: AUC + Bootstrap CI + ROC ====================
+if (length(all_true) > 0 && length(unique(all_true)) == 2) {
+  
+  roc_all <- roc(all_true, all_pred, quiet = TRUE)
+  auc_all <- auc(roc_all)
+  
+  set.seed(777)
+  n_boot <- 1000
+  auc_boot <- c()
+  
+  for (b in 1:n_boot) {
+    idx <- sample(1:length(all_true), size = length(all_true), replace = TRUE)
+    boot_true <- all_true[idx]
+    boot_pred <- all_pred[idx]
+    
+    if (length(unique(boot_true)) == 2) {
+      roc_boot <- tryCatch(roc(boot_true, boot_pred, quiet = TRUE),
+                           error = function(e) NULL)
+      if (!is.null(roc_boot)) {
+        auc_boot <- c(auc_boot, auc(roc_boot))
+      }
+    }
+  }
+  
+  ci_boot <- quantile(auc_boot, c(0.025, 0.975), na.rm = TRUE)
+  
+  cat("\n========== Pooled AUC (all outer folds) & Bootstrap ==========\n")
+  cat("Pooled AUC:", round(auc_all, 4), "\n")
+  cat("Bootstrap AUC mean:", round(mean(auc_boot), 4), "\n")
+  cat("Bootstrap AUC SD:", round(sd(auc_boot), 4), "\n")
+  cat("Bootstrap 95% CI:", round(ci_boot[1], 4), "-", round(ci_boot[2], 4), "\n")
+  
+  pdf("Nested_CV_ROC.pdf", width = 6, height = 6)
+  plot(roc_all,
+       main = paste("Nested CV ROC (AUC =", round(auc_all, 3), ")"),
+       col = "#D95F02",
+       lwd = 3,
+       legacy.axes = TRUE,
+       xlab = "1 - Specificity",
+       ylab = "Sensitivity")
+  abline(a = 0, b = 1, col = "gray50", lty = 2, lwd = 1.5)
+  legend("bottomright",
+         legend = c(paste("AUC =", round(auc_all, 3)),
+                    paste("95% CI:", round(ci_boot[1], 3), "-", round(ci_boot[2], 3))),
+         col = c("#D95F02", NA),
+         lty = c(1, NA),
+         lwd = c(3, NA),
+         bty = "n")
+  dev.off()
+  
+  cat("Nested CV ROC saved as Nested_CV_ROC.pdf\n")
+}
+
+# ==================== TCGA  ====================
+Test_data <- as.matrix(Test_set[, best.model.gene])
+pred_prob <- CalPredictScore(fit = model[[best.model]], new_data = Test_data)
+
+Test_y <- Test_class[rownames(Test_data), "outcome"]
+
+cat("TCGA rowname match:",
+    identical(rownames(Test_class), rownames(Test_data)), "\n")
+cat("TCGA class distribution:\n")
+print(table(Test_y))
+
+if (length(unique(Test_y)) == 2) {
+  tcga_roc <- roc(Test_y, pred_prob, quiet = TRUE)
+  tcga_auc <- auc(tcga_roc)
+  tcga_ci  <- ci.auc(tcga_roc, method = "bootstrap")
+  
+  cat("\n========== TCGA Results ==========\n")
+  cat("Samples:", length(Test_y), "\n")
+  cat("Normal:", sum(Test_y == 0), ", Tumor:", sum(Test_y == 1), "\n")
+  cat("AUC:", round(tcga_auc, 4), "\n")
+  cat("95% CI:", round(tcga_ci[1], 4), "-", round(tcga_ci[2], 4), "\n")
+  
+  pdf("TCGA_ROC.pdf", width = 6, height = 6)
+  plot(tcga_roc,
+       main = paste("TCGA  (AUC =", round(tcga_auc, 3), ")"),
+       col = "#2E9FDF",
+       lwd = 3,
+       legacy.axes = TRUE,
+       xlab = "1 - Specificity",
+       ylab = "Sensitivity")
+  abline(a = 0, b = 1, col = "gray50", lty = 2, lwd = 1.5)
+  legend("bottomright",
+         legend = c(paste("AUC =", round(tcga_auc, 3)),
+                    paste("95% CI:", round(tcga_ci[1], 3), "-", round(tcga_ci[2], 3))),
+         col = c("#2E9FDF", NA),
+         lty = c(1, NA),
+         lwd = c(3, NA),
+         bty = "n")
+  dev.off()
+  
+  cat("ROC saved as TCGA_ROC.pdf\n")
+} else {
+  cat("TCGA validation: insufficient classes for AUC/ROC.\n")
+}                          
