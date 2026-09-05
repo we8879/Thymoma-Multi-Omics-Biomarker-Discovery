@@ -126,8 +126,6 @@ Key package versions used in the study: `sva` 3.58.0, `limma` 3.64.1, `ChAMP`
 2.38.0, `clusterProfiler` 4.18.2, `DESeq2` 1.50.2, `ggplot2` 3.5.2, `Seurat`
 4.4.0, `scTenifoldKnk` 1.0.3.
 
-See [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) for the full list and
-install commands.
 
 ---
 
